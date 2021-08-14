@@ -1,5 +1,5 @@
 [package]
-name = "sse-client"
+name = "sse-agent"
 version = "0.1.0"
 edition = "2018"
 
@@ -9,3 +9,9 @@ edition = "2018"
 bytes = "1.0.1"
 futures-core = "0.3.16"
 memchr = "2.4.0"
+
+
+[dev-dependencies]
+futures-util = "0.3.16"
+hyper = { version = "0.14.11", default_features = false, features = [ "stream" ]}
+tokio = { version = "1.10", default_features = false, features = [ "macros", "rt" ] }
