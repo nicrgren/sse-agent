@@ -28,18 +28,22 @@ impl EventBuilder {
             // Set event type buffer to value. After parsing as utf8.
             self.event_type.replace(String::from(value));
         } else if name == &b"data"[..] {
-            match self.data {
+            // According to the spec
+            // (https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation)
+            // Whenever data is pushed, a single LF should be appended
+            // and then removed whenever an entire event is created.
+            // However this is stupid, better just add a LF before
+            // appending data to an already existing data buffer.
+            // So we push a LF before we add MORE data.
+            match dbg!(&mut self.data) {
                 Some(ref mut data) => {
                     data.reserve(value.len() + 1);
-                    data.push_str(value);
                     data.push('\n');
+                    data.push_str(value);
                 }
 
                 None => {
-                    let mut s = String::with_capacity(value.len() + 1);
-                    s.push_str(value);
-                    s.push('\n');
-                    self.data = Some(s);
+                    self.data = Some(String::from(value));
                 }
             }
         } else if name == &b"id"[..] && !value.contains(NULL) {
@@ -55,10 +59,15 @@ impl EventBuilder {
         Ok(())
     }
 
-    pub fn build_and_clear(&mut self) -> Result<crate::Event, Error> {
+    fn ready(&self) -> bool {
+        self.event_type.is_some() || self.data.is_some() || self.last_event_id.is_some()
+    }
+
+    fn build_and_clear(&mut self) -> Result<crate::Event, Error> {
         Ok(crate::Event {
-            event_type: self.event_type.take().unwrap_or_else(String::new),
+            typ: self.event_type.take().unwrap_or_else(String::new),
             data: self.data.take().unwrap_or_else(String::new),
+            last_event_id: self.last_event_id.take(),
         })
     }
 }
@@ -77,6 +86,52 @@ impl Parser {
     /// Parses a line and attemps to add it to the current Builder.
     ///
     pub fn next(&mut self) -> Option<Result<crate::Event, Error>> {
+        // Parse while there are lines.
+
+        while let Some(line) = dbg!(self.parse_line()) {
+            if dbg!(line.is_empty()) && dbg!(self.builder.ready()) {
+                return Some(self.builder.build_and_clear());
+            }
+
+            // Check if there's a colon in the line
+            match dbg!(memchr(COLON, &line)) {
+                // Lines beginning with colon are just skipped
+                Some(0) => {
+                    continue;
+                }
+
+                Some(i) => {
+                    // name is all the characters to the left of the colon.
+                    let name = &line[0..i];
+
+                    // Let value be all the chars AFTER the colon.
+                    // Drop any SPACE immeadately after the colon.
+                    let value = if i + 1 < line.len() && line[i + 1] == b' ' {
+                        &line[i + 2..]
+                    } else {
+                        &line[i + 1..]
+                    };
+
+                    // TODO:
+                    // 1. Remove potential white space after colon
+                    // 2. Verify that lines ending in colon works.
+                    if let Err(err) = self.builder.add_field(name, value) {
+                        return Some(Err(err));
+                    }
+                }
+
+                None => {
+                    if let Err(err) = self.builder.add_field(&line[..], &[][..]) {
+                        return Some(Err(err));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn parse_line(&mut self) -> Option<Bytes> {
         // Ways a line can end:
         //
         // a U+000D CARRIAGE RETURN U+000A LINE FEED (CRLF) character pair,
@@ -92,54 +147,19 @@ impl Parser {
         //
         // being the ways in which a line can end.
 
-        let line = self.parse_line()?;
-
-        if line.is_empty() {
-            return Some(self.builder.build_and_clear());
-        }
-
-        // Check if there's a colon in the line
-        match memchr(COLON, &line) {
-            Some(0) => {
-                return None;
-            }
-
-            Some(i) => {
-                // name is all the characters to the left of the colon.
-                let name = &line[0..i];
-
-                // Let value be all the chars AFTER the colon.
-                let value = &line[i + 1..];
-
-                // TODO:
-                // 1. Remove potential white space after colon
-                // 2. Verify that lines ending in colon works.
-                if let Err(err) = self.builder.add_field(name, value) {
-                    return Some(Err(err));
-                }
-            }
-
-            None => {
-                if let Err(err) = self.builder.add_field(&line[..], &[][..]) {
-                    return Some(Err(err));
-                }
-            }
-        };
-
-        None
-    }
-
-    fn parse_line(&mut self) -> Option<Bytes> {
         match memchr2(CR, LF, &self.buf) {
             Some(i) => {
-                let line = self.buf.split_to(i).freeze();
-                self.buf.advance(1);
+                let line = self.buf.split_to(i);
 
-                if !self.buf.is_empty() && self.buf[0] == LF {
-                    self.buf.advance(1);
+                if !self.buf.is_empty() {
+                    if 2 < self.buf.len() && self.buf[0..2] == [CR, LF] {
+                        self.buf.advance(2);
+                    } else {
+                        self.buf.advance(1);
+                    }
                 }
 
-                Some(line)
+                Some(line.freeze())
             }
 
             None => None,
@@ -147,6 +167,7 @@ impl Parser {
     }
 
     #[cfg(test)]
+    /// Helper fn for tests.
     fn bytes(&self) -> &[u8] {
         &self.buf
     }
@@ -154,11 +175,17 @@ impl Parser {
 
 impl From<&[u8]> for Parser {
     fn from(b: &[u8]) -> Self {
-        let mut buf = BytesMut::with_capacity(b.remaining());
-        buf.extend_from_slice(b);
-
         Self {
-            buf,
+            buf: BytesMut::from(b),
+            builder: EventBuilder::default(),
+        }
+    }
+}
+
+impl From<&str> for Parser {
+    fn from(s: &str) -> Self {
+        Self {
+            buf: BytesMut::from(s),
             builder: EventBuilder::default(),
         }
     }
@@ -171,29 +198,34 @@ mod tests {
 
     #[test]
     fn buf_cleared_line_ending_with_crlf() {
-        let mut p = Parser::from(&b"\r\n"[..]);
+        let mut p = Parser::from("\r\n");
         p.next();
         assert_eq!(p.bytes(), &[]);
     }
 
     #[test]
+    fn single_lf_should_be_empty_line() {
+        let mut p = Parser::from("\n");
+        assert_eq!(p.parse_line().expect("parsing line"), &b""[..]);
+    }
+
+    #[test]
     fn buf_cleared_line_ending_with_cr() {
-        let mut p = Parser::from(&b"\r"[..]);
+        let mut p = Parser::from("\r");
         p.next();
         assert_eq!(p.bytes(), &[]);
     }
 
     #[test]
     fn buf_cleared_line_ending_with_lf() {
-        let mut p = Parser::from(&b"\n"[..]);
+        let mut p = Parser::from("\n");
         p.next();
         assert_eq!(p.bytes(), &[]);
     }
 
     #[test]
     fn lines_starting_with_colon_are_ignored() {
-        let mut p = Parser::default();
-        p.put(&b":ok"[..]);
+        let mut p = Parser::from(":ok");
         assert!(p.next().is_none());
     }
 
@@ -202,5 +234,134 @@ mod tests {
         let bs = &b"abcd\r\n"[..];
         assert_eq!(memchr2(CR, LF, bs), Some(4));
         assert_eq!(memchr2(LF, CR, bs), Some(4));
+    }
+
+    #[test]
+    fn colon_as_last_char_in_row() {
+        let mut p = Parser::from("data:\n\n");
+        let ev = p.next().expect("Expected an event").expect("Should parse");
+        assert_eq!(ev.typ, "");
+        assert_eq!(ev.data, "");
+    }
+
+    #[test]
+    fn parse_example_2_events() {
+        // The following stream fires two events:
+
+        let mut p = Parser::from(
+            r#"
+data
+
+data
+data
+
+data:"#,
+        );
+
+        // The first block fires events with the data set to the empty string,
+        // as would the last block if it was followed by a blank line.
+        //
+        // The middle block fires an event with the data set to a single newline character.
+        //
+        // The last block is discarded because it is not followed by a blank line.
+
+        let ev = p.next().expect("Event").expect("Parsed");
+        assert_eq!(ev.typ, "");
+        assert_eq!(ev.data, "");
+
+        let ev = p.next().expect("Event").expect("Parsed");
+        assert_eq!(ev.typ, "");
+        assert_eq!(ev.data, "\n");
+
+        assert!(p.next().is_none());
+    }
+
+    #[test]
+    fn parse_two_identical_events() {
+        // The following stream fires two identical events:
+        // This is because the space after the colon is ignored if present.
+        let mut p = Parser::from(
+            r#"
+data:test
+
+data: test
+
+"#,
+        );
+
+        let ev = p
+            .next()
+            .expect("Expected first event")
+            .expect("Should parse");
+
+        assert_eq!(ev.typ, "");
+        assert_eq!(ev.data, "test");
+
+        let ev = p
+            .next()
+            .expect("Expected first event")
+            .expect("Should parse");
+
+        assert_eq!(ev.typ, "");
+        assert_eq!(ev.data, "test");
+    }
+
+    #[test]
+    fn parse_biggest_example_from_spec_page() {
+        // The following stream contains four blocks.
+        // The first block has just a comment, and will fire nothing.
+        //
+        // The second block has two fields with names "data" and "id" respectively;
+        // an event will be fired for this block,
+        // with the data "first event",
+        // and will then set the last event ID to "1"
+        // so that if the connection died between this block and the next,
+        // the server would be sent a `Last-Event-ID` header with the value "1".
+        //
+        // The third block fires an event with data "second event", and also has an "id" field,
+        // this time with no value, which resets the last event ID to the
+        // empty string (meaning no `Last-Event-ID` header will now be sent in
+        // the event of a reconnection being attempted).
+        //
+        // Finally, the last block just fires an event with the data " third event"
+        // (with a single leading space character).
+        // Note that the last still has to end with a blank line,
+        // the end of the stream is not enough to trigger the dispatch of the last event.
+
+        let mut p = Parser::from(
+            r#"
+: test stream
+
+data: first event
+id: 1
+
+data:second event
+id
+
+data:  third event
+
+"#,
+        );
+
+        let ev = p.next().expect("Event").expect("Parses");
+        assert_eq!(ev.data, "first event");
+        assert_eq!(ev.last_event_id.as_deref(), Some("1"));
+
+        let ev = p.next().expect("Event").expect("Parses");
+        assert_eq!(ev.data, "second event");
+        assert_eq!(ev.last_event_id.as_deref(), Some(""));
+
+        let ev = p.next().expect("Event").expect("Parses");
+        assert_eq!(ev.data, " third event");
+        assert_eq!(ev.last_event_id, None);
+    }
+
+    #[test]
+    fn buf_fiddle() {
+        let mut buf = BytesMut::from("1234");
+
+        let left = buf.split_to(1);
+        assert_eq!(left, &b"1"[..]);
+        assert_eq!(buf, &b"234"[..]);
     }
 }
