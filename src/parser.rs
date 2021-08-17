@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use memchr::{memchr, memchr2};
-use std::str;
+use std::{error::Error as StdError, fmt, str};
 
 const CR: u8 = b'\r';
 const LF: u8 = b'\n';
@@ -10,7 +10,23 @@ const NULL: char = '\u{0000}';
 /// Inner Error kind that contains possible errors occuring during parsing.
 #[derive(Clone, Copy, Debug)]
 pub enum Error {
-    InvalidUtf8InValue,
+    Utf8(std::str::Utf8Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Utf8(err) => write!(f, "Invalid UTF8: {}", err),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Utf8(ref err) => Some(err),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -22,7 +38,7 @@ struct EventBuilder {
 
 impl EventBuilder {
     pub fn add_field(&mut self, name: &[u8], value_bs: &[u8]) -> Result<(), Error> {
-        let value = str::from_utf8(value_bs).map_err(|_| Error::InvalidUtf8InValue)?;
+        let value = str::from_utf8(value_bs).map_err(Error::Utf8)?;
 
         if name == &b"event"[..] {
             // Set event type buffer to value. After parsing as utf8.
@@ -65,7 +81,7 @@ impl EventBuilder {
 
     fn build_and_clear(&mut self) -> Result<crate::Event, Error> {
         Ok(crate::Event {
-            typ: self.event_type.take().unwrap_or_else(String::new),
+            event: self.event_type.take().unwrap_or_else(String::new),
             data: self.data.take().unwrap_or_else(String::new),
             last_event_id: self.last_event_id.take(),
         })

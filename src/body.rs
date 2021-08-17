@@ -19,7 +19,7 @@ where
     B: bytes::Buf,
     E: StdError + Unpin,
 {
-    type Item = Result<Event, Error>;
+    type Item = Result<Event, Error<E>>;
 
     fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context) -> Poll<Option<Self::Item>> {
         // Whenever the parser cannot yet produce an Event. We want to poll the underlying
