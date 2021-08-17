@@ -55,11 +55,11 @@ data:"#,
     // The last block is discarded because it is not followed by a blank line.
 
     let ev = p.next().await.expect("Event").expect("Parsed");
-    assert_eq!(ev.typ, "");
+    assert_eq!(ev.event, "");
     assert_eq!(ev.data, "");
 
     let ev = p.next().await.expect("Event").expect("Parsed");
-    assert_eq!(ev.typ, "");
+    assert_eq!(ev.event, "");
     assert_eq!(ev.data, "\n");
 
     assert!(p.next().await.is_none());

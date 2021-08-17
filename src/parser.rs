@@ -256,7 +256,7 @@ mod tests {
     fn colon_as_last_char_in_row() {
         let mut p = Parser::from("data:\n\n");
         let ev = p.next().expect("Expected an event").expect("Should parse");
-        assert_eq!(ev.typ, "");
+        assert_eq!(ev.event, "");
         assert_eq!(ev.data, "");
     }
 
@@ -282,11 +282,11 @@ data:"#,
         // The last block is discarded because it is not followed by a blank line.
 
         let ev = p.next().expect("Event").expect("Parsed");
-        assert_eq!(ev.typ, "");
+        assert_eq!(ev.event, "");
         assert_eq!(ev.data, "");
 
         let ev = p.next().expect("Event").expect("Parsed");
-        assert_eq!(ev.typ, "");
+        assert_eq!(ev.event, "");
         assert_eq!(ev.data, "\n");
 
         assert!(p.next().is_none());
@@ -310,7 +310,7 @@ data: test
             .expect("Expected first event")
             .expect("Should parse");
 
-        assert_eq!(ev.typ, "");
+        assert_eq!(ev.event, "");
         assert_eq!(ev.data, "test");
 
         let ev = p
@@ -318,7 +318,7 @@ data: test
             .expect("Expected first event")
             .expect("Should parse");
 
-        assert_eq!(ev.typ, "");
+        assert_eq!(ev.event, "");
         assert_eq!(ev.data, "test");
     }
 
