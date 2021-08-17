@@ -35,7 +35,7 @@ impl EventBuilder {
             // However this is stupid, better just add a LF before
             // appending data to an already existing data buffer.
             // So we push a LF before we add MORE data.
-            match dbg!(&mut self.data) {
+            match &mut self.data {
                 Some(ref mut data) => {
                     data.reserve(value.len() + 1);
                     data.push('\n');
@@ -88,13 +88,13 @@ impl Parser {
     pub fn next(&mut self) -> Option<Result<crate::Event, Error>> {
         // Parse while there are lines.
 
-        while let Some(line) = dbg!(self.parse_line()) {
-            if dbg!(line.is_empty()) && dbg!(self.builder.ready()) {
+        while let Some(line) = self.parse_line() {
+            if line.is_empty() && self.builder.ready() {
                 return Some(self.builder.build_and_clear());
             }
 
             // Check if there's a colon in the line
-            match dbg!(memchr(COLON, &line)) {
+            match memchr(COLON, &line) {
                 // Lines beginning with colon are just skipped
                 Some(0) => {
                     continue;

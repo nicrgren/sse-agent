@@ -5,8 +5,8 @@ mod error;
 mod event;
 mod parser;
 
-use body::Body;
 pub use {
+    body::Body,
     error::{Error, ErrorKind},
     event::Event,
 };
