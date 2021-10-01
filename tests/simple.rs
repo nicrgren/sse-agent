@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use sse_agent::SseBody;
+use sse_agent::Sse;
 
 #[tokio::test]
 async fn parse_hyper_body_as_sse() {

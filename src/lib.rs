@@ -11,11 +11,11 @@ pub use {
     event::Event,
 };
 
-pub trait SseBody<S> {
+pub trait Sse<S> {
     fn into_sse(self) -> Body<S>;
 }
 
-impl<S, E> SseBody<S> for S
+impl<S, E> Sse<S> for S
 where
     S: Stream<Item = Result<Bytes, E>> + Unpin,
     E: std::error::Error,
